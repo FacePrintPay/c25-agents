@@ -97,3 +97,8 @@ if __name__ == "__main__":
     import uvicorn
     print("🚀 CONSTELLATION25 SOVEREIGN NODE ONLINE → http://0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+if __name__ == "__main__":
+    import uvicorn
+    print("STARTING SOVEREIGN NODE ON http://0.0.0.0:8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
