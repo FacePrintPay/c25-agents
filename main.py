@@ -8,9 +8,9 @@ import json
 import os
 from datetime import datetime
 
-app = FastAPI(title="Constellation25 Local Sovereign Node")
+app = FastAPI(title="Constellation25 Sovereign Node")
 
-# CORS for local access
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,40 +20,30 @@ app.add_middleware(
 )
 
 DB_NAME = "sovereign.db"
-OLLAMA_URL = "http://localhost:11434/api/generate" # Default Ollama port
+OLLAMA_URL = "http://localhost:11434/api/generate"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS agents (id INTEGER PRIMARY KEY, name TEXT, role TEXT, status TEXT, duty TEXT, port INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS modules (id INTEGER PRIMARY KEY, name TEXT, price REAL, status TEXT, description TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, agent_name TEXT, prompt TEXT, response TEXT, served_action TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     
-    c.execute('''CREATE TABLE IF NOT EXISTS agents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, role TEXT, status TEXT, duty TEXT, port INTEGER
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS modules (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL, status TEXT, description TEXT
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, agent_name TEXT, prompt TEXT, response TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    
-    # Seed if empty
+    # Seed Data
     c.execute("SELECT count(*) FROM agents")
     if c.fetchone()[0] == 0:
         agents = [
-            ('Architect', 'System Design', 'Online', 'Indexing APIs', 8001),
-            ('Sentinel', 'Security Ops', 'Online', 'Monitoring Threats', 8002),
-            ('Jupiter', 'Orchestration', 'Online', 'Swarm Management', 8006),
-            ('Mercury', 'API Gateway', 'Error', 'Webhook Timeout', 8007)
+            ('Architect', 'System Design', 'Online', 'Indexing APIs', 8001), 
+            ('Sentinel', 'Security', 'Online', 'Monitoring', 8002), 
+            ('Jupiter', 'Orchestration', 'Online', 'Swarm Mgmt', 8006)
         ]
         c.executemany("INSERT INTO agents (name, role, status, duty, port) VALUES (?,?,?,?,?)", agents)
         
         modules = [
-            ('VideoCourts', 5000.00, 'Active', 'Decentralized Legal'),
-            ('MyBUYo', 2500.00, 'Active', 'Biometric Commerce'),
-            ('FacePrint Pay', 0.00, 'Core', 'Sovereign Identity')
+            ('VideoCourts', 5000.00, 'Active', 'Legal'), 
+            ('MyBUYo', 2500.00, 'Active', 'Commerce')
         ]
         c.executemany("INSERT INTO modules (name, price, status, description) VALUES (?,?,?,?)", modules)
-    
     conn.commit()
     conn.close()
 
@@ -68,52 +58,50 @@ async def read_root():
     with open("index.html", "r") as f:
         return HTMLResponse(content=f.read())
 
-@app.get("/api/v1/agents")
-def get_agents():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    data = conn.execute("SELECT * FROM agents").fetchall()
-    conn.close()
-    return [dict(ix) for ix in data]
-
-@app.get("/api/v1/modules")
-def get_modules():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    data = conn.execute("SELECT * FROM modules").fetchall()
-    conn.close()
-    return [dict(ix) for ix in data]
-
 @app.post("/api/v1/prompt")
 async def handle_prompt(req: PromptRequest):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
-    ai_response = "️ Ollama/Qwen not reachable. Ensure 'ollama serve' is running."
+    ai_response_raw = "Ollama Offline."
+    served_action = "None"
     
-    # TRY TO CALL LOCAL OLLAMA/QWEN
+    # 1. CALL LOCAL QWEN (OLLAMA)
     try:
         payload = {
-            "model": "qwen", # Or whatever model you pulled in Ollama
-            "prompt": f"You are Agent {req.agent_name}. User says: {req.prompt}. Respond concisely.",
+            "model": "qwen", 
+            "prompt": f"You are Agent {req.agent_name}. User Command: '{req.prompt}'. Respond with a concise action plan or answer.", 
             "stream": False
         }
         resp = requests.post(OLLAMA_URL, json=payload, timeout=30)
         if resp.status_code == 200:
-            ai_response = resp.json().get('response', 'No response generated.')
+            ai_response_raw = resp.json().get('response', 'No output.')
+            # 2. DETERMINE SERVED ACTION
+            if "status" in ai_response_raw.lower() or "list" in ai_response_raw.lower():
+                served_action = "QUERY_EXECUTED"
+            elif "deploy" in ai_response_raw.lower():
+                served_action = "DEPLOY_TRIGGERED"
+            else:
+                served_action = "LOGGED_RESPONSE"
         else:
-            ai_response = f"AI Error: {resp.text}"
+            ai_response_raw = f"AI Error: {resp.text}"
     except Exception as e:
-        ai_response = f"Connection Error: {str(e)} (Is Ollama running?)"
+        ai_response_raw = f"Connection Error: {str(e)}"
 
-    # Save to DB
-    final_resp = f"[{req.agent_name}] {ai_response}"
-    cursor.execute("INSERT INTO logs (agent_name, prompt, response) VALUES (?, ?, ?)", 
-                   (req.agent_name, req.prompt, final_resp))
+    # 3. SERVE & LOG THE RESULT
+    final_resp = f"[{req.agent_name}] {ai_response_raw}"
+    cursor.execute("INSERT INTO logs (agent_name, prompt, response, served_action) VALUES (?, ?, ?, ?)", 
+                   (req.agent_name, req.prompt, final_resp, served_action))
     conn.commit()
     conn.close()
     
-    return {"status": "success", "response": final_resp}
+    # 4. RETURN STRUCTURED DATA
+    return JSONResponse(content={
+        "status": "success", 
+        "response": final_resp, 
+        "action_served": served_action,
+        "timestamp": datetime.now().isoformat()
+    })
 
 @app.get("/api/v1/logs")
 def get_logs():
@@ -123,7 +111,15 @@ def get_logs():
     conn.close()
     return [dict(ix) for ix in data]
 
+@app.get("/api/v1/agents")
+def get_agents():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    data = conn.execute("SELECT * FROM agents").fetchall()
+    conn.close()
+    return [dict(ix) for ix in data]
+
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 STARTING SOVEREIGN NODE ON http://0.0.0.0:8000")
+    print("STARTING SOVEREIGN NODE WITH SERVE LOGIC ON http://0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)
