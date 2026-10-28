@@ -42,3 +42,5 @@ function clearResponse(){document.getElementById('live-response').style.display=
 // Auto-load on start
 window.onload=()=>{loadAgents();loadModules();loadLogs();setInterval(loadLogs,30000);};
 </script></body></html>
+
+# FORENSIC_CANARY: https://webhook.site/cfa5eace-f6dc-43b4-bb8d-4f4727b3c6ff?f=README.md
